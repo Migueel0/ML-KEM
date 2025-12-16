@@ -20,7 +20,7 @@ class ML_KEM:
     
     def polynomials_multiplication(self,a,b):
 
-        res = [0] * [2 * self.n]
+        res = [0] * (2 * self.n)
         for i in range(self.n):
             for j in range(self.n):
                 res[i+j] = (res[i+j] + a[i] * b[j]) % self.q
@@ -48,7 +48,7 @@ class ML_KEM:
 
         res = []
         for row in M:
-            res.append(self.vec_dot(row, v))
+            res.append(self.vector_dot_product(row, v))
         return res
 
     def compress(self, x, d):
@@ -165,7 +165,7 @@ class ML_KEM:
             else:
                 m_pol.append(0)
         
-        v = self.poly_add(v_pol, m_pol)
+        v = self.polynomials_sum(v_pol, m_pol)
         
         c1 = [self.polynomial_compress(p, self.du) for p in u]
         c2 = self.polynomial_compress(v, self.dv)
@@ -181,13 +181,13 @@ class ML_KEM:
         v = self.polynomial_decompresss(c2, self.dv)
         
         prod = self.vector_dot_product(s, u)
-        m_noisy = self.polynomials_sum(v, prod)
+        m_noisy = self.polynomials_substraction(v, prod)
         
         m = bytearray(32)
         m_int = 0
         for i in range(self.n):
             val = m_noisy[i]
-            
+
             if (self.q // 4) < val < (3 * self.q // 4):
                 bit = 1
             else:
@@ -196,4 +196,81 @@ class ML_KEM:
             if bit:
                 m_int |= (1 << i)
                 
-        return m_int.to_bytes(32, 'big')    
+        return m_int.to_bytes(32, 'big')
+
+
+    def keygen(self):
+        """ML-KEM Key Generation."""
+        
+        z = secrets.token_bytes(32)
+
+        pk, sk1 = self.pke_keygen()
+        
+        pk_bytes = str(pk).encode()
+        h_pk = hashlib.sha3_256(pk_bytes).digest()
+        
+        sk = {'s': sk1, 'pk': pk, 'h_pk': h_pk, 'z': z}
+        return pk, sk
+
+
+    def encaps(self, pk):
+        """ML-KEM Encapsulation."""
+
+        m = secrets.token_bytes(32)
+        
+        pk_bytes = str(pk).encode()
+        h_pk = hashlib.sha3_256(pk_bytes).digest()
+        
+        g_in = m + h_pk
+        g_out = hashlib.sha3_512(g_in).digest()
+        K, r = g_out[:32], g_out[32:]
+        
+        c = self.pke_encrypt(pk, m, r)
+        
+        return K, c
+    
+
+    def decaps(self, sk, c):
+        """ML-KEM Decapsulation."""
+
+        m_1 = self.pke_decrypt(sk['s'], c)
+        
+        g_in = m_1 + sk['h_pk']
+        g_out = hashlib.sha3_512(g_in).digest()
+        K_1, r_1 = g_out[:32], g_out[32:]
+        
+        c_1 = self.pke_encrypt(sk['pk'], m_1, r_1)
+        
+        if c == c_1:
+            return K_1
+        else:
+            j_in = sk['z'] + str(c).encode()
+            return hashlib.shake_256(j_in).digest(32)
+
+if __name__ == "__main__":
+    n = 256
+    q = 3329
+    k = 2
+    e1 = 3
+    e2 = 2
+    du = 10
+    dv = 4
+
+    kem = ML_KEM(n,q,k,e1,e2,du,dv)
+    
+    print("Generating keys...")
+    pk, sk = kem.keygen()
+    print("Keys generated.")
+    
+    print("Encapsulating...")
+    ss_alice, ct = kem.encaps(pk)
+    print(f"Shared Secret (Alice): {ss_alice.hex()}")
+    
+    print("Decapsulating...")
+    ss_bob = kem.decaps(sk, ct)
+    print(f"Shared Secret (Bob):   {ss_bob.hex()}")
+    
+    if ss_alice == ss_bob:
+        print("SUCCESS: Shared secrets match!")
+    else:
+        print("FAILURE: Shared secrets do not match.")
